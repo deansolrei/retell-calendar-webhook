@@ -106,8 +106,17 @@ function requireAuth(req, res) {
   return true;
 }
 
-// Keep express.json() after raw-collector if you inserted above:
-// collect raw request body while still letting express.json() parse it app.use(express.json({ limit: '256kb', verify: (req, res, buf) => { try { req.rawBody = buf && buf.length ? buf.toString('utf8') : ''; } catch (e) { req.rawBody = ''; } } }));
+app.use(express.json({
+  limit: '256kb', verify: (req, res, buf) => {
+    try {
+      req.rawBody = buf && buf.length ? buf.toString('utf8') : '';
+    } catch (e) {
+      req.rawBody = '';
+    }
+  }
+}));
+
+
 /**
  * POST /availability
  * Body:
@@ -121,7 +130,12 @@ function requireAuth(req, res) {
  */
 app.post('/availability', async (req, res) => {
   try {
-    console.log('DEBUG RAW BODY:', req.rawBody || '<empty>'); console.log('DEBUG /availability headers:', JSON.stringify(req.headers || {})); console.log('DEBUG /availability parsed body:', JSON.stringify(req.body || {})); if (!requireAuth(req, res)) return;
+    console.log('DEBUG RAW BODY:', req.rawBody || '<empty>');
+    console.log('DEBUG /availability headers:', JSON.stringify(req.headers ||
+      {})); console.log('DEBUG /availability parsed body:',
+        JSON.stringify(req.body || {}));
+
+    if (!requireAuth(req, res)) return;
 
     const body = req.body || {};
     const calendarId = body.calendar_id || body.calendarId;
