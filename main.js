@@ -8,59 +8,161 @@
  *     - POST /availability  (robust normalizing handler for Retell calls)
  *     - POST /book         (simple fallback response)
  *     - POST /parse-name   (name parser for Retell Custom Function)
+ *     - POST /parse-provider (provider name -> token/calendar lookup)
  *
- * The /availability handler normalizes inputs:
- * - Accepts nested requested_window object OR a JSON string OR flat form fields:
- *     requested_window_start_hour, requested_window_end_hour, requested_window_slot_duration_minutes
- * - Accepts calendar_id as either provider_token (preferred) or provider_calendar_id (email)
- * - Validates required fields and logs a normalized payload for debugging
- *
- * NOTE: Replace the PROVIDERS map with your canonical providers.js import when ready.
+ * Notes:
+ * - This file prefers a providers.json in repo root. If missing, it falls back to
+ *   a small built-in providers map (with solreibehavioralhealth.com addresses).
+ * - Both the primary mainApp (if it is an Express app) and the fallback server
+ *   expose the same utility endpoints so Retell can call a single service URL.
  */
 
 const express = require('express');
-const PROVIDERS = require('./providers.json');
+let PROVIDERS = {};
+try {
+  // prefer canonical external providers.json when present
+  PROVIDERS = require('./providers.json');
+  console.log('Loaded providers.json');
+} catch (e) {
+  // fallback static map (update these addresses if needed)
+  PROVIDERS = {
+    'katherine-robins': { token: 'katherine-robins', calendar_id: 'katherine-robins@solreibehavioralhealth.com', name: 'Katherine Robins' },
+    'jodene-jensen': { token: 'jodene-jensen', calendar_id: 'jodene-jensen@solreibehavioralhealth.com', name: 'Jodene Jensen' },
+    'megan-ramirez': { token: 'megan-ramirez', calendar_id: 'megan-ramirez@solreibehavioralhealth.com', name: 'Megan Ramirez' }
+  };
+  console.warn('providers.json not found — using built-in PROVIDERS fallback');
+}
 
-// findProvider can remain the same, using PROVIDERS map
+function findProvider(tokenOrEmail) {
+  if (!tokenOrEmail) return null;
+  const s = String(tokenOrEmail).toLowerCase();
+  // direct token match
+  if (PROVIDERS[s]) return PROVIDERS[s];
+  // email match
+  for (const k of Object.keys(PROVIDERS)) {
+    if (PROVIDERS[k].calendar_id && PROVIDERS[k].calendar_id.toLowerCase() === s) {
+      return PROVIDERS[k];
+    }
+  }
+  return null;
+}
+
+function compactObject(obj) {
+  const out = {};
+  for (const k of Object.keys(obj || {})) {
+    const v = obj[k];
+    if (v !== undefined && v !== null && v !== '') out[k] = v;
+  }
+  return out;
+}
+
+function attachParseName(appInstance) {
+  if (!appInstance || typeof appInstance.post !== 'function') return;
+  try {
+    // Ensure JSON parsing
+    try { appInstance.use(express.json()); } catch (e) { }
+    appInstance.post('/parse-name', (req, res) => {
+      try {
+        const maybeArgs = req.body && req.body.args ? req.body.args : null;
+        const user_message = (req.body && (req.body.user_message || req.body.text)) ||
+          (maybeArgs && maybeArgs.user_message) ||
+          '';
+        function splitName(raw) {
+          if (!raw || !String(raw).trim()) return { full_name: "", first_name: "", last_name: "" };
+          const s = String(raw).trim();
+          const suffixRegex = /\b(Jr\.|Sr\.|II|III|IV)\b\.?$/i;
+          const orig = s;
+          const noSuffix = s.replace(suffixRegex, '').trim();
+          const parts = noSuffix.split(/\s+/);
+          const first = parts.length ? parts[0] : "";
+          const last = parts.length > 1 ? parts[parts.length - 1] : "";
+          return { full_name: orig, first_name: first, last_name: last };
+        }
+        return res.status(200).json(splitName(user_message));
+      } catch (err) {
+        console.error('Error in /parse-name handler:', err && err.stack ? err.stack : err);
+        return res.status(200).json({ full_name: "", first_name: "", last_name: "" });
+      }
+    });
+  } catch (err) {
+    console.warn('Could not attach /parse-name:', err && err.message ? err.message : err);
+  }
+}
+
+function attachParseProvider(appInstance) {
+  if (!appInstance || typeof appInstance.post !== 'function') return;
+  try {
+    try { appInstance.use(express.json()); } catch (e) { }
+    appInstance.post('/parse-provider', (req, res) => {
+      try {
+        const maybeArgs = req.body && req.body.args ? req.body.args : null;
+        const raw = (req.body && (req.body.user_message || req.body.text)) ||
+          (maybeArgs && maybeArgs.user_message) ||
+          '';
+        const s = String(raw).trim().toLowerCase();
+
+        // quick negatives -> empty token
+        const negatives = ["don't have", "dont have", "i don't have", "i dont have", "no provider", "nope", "none", "no"];
+        for (const p of negatives) {
+          if (s.includes(p)) {
+            return res.json({ provider_name: '', provider_token: '', provider_calendar_id: '' });
+          }
+        }
+
+        // Build scan keys from PROVIDERS: token, name, first/last parts, calendar_id
+        for (const key of Object.keys(PROVIDERS)) {
+          const p = PROVIDERS[key];
+          const token = String(p.token || key).toLowerCase();
+          const cal = String(p.calendar_id || '').toLowerCase();
+          const name = String(p.name || '').toLowerCase();
+
+          // check token or calendar_id directly
+          if (s === token || s === cal) {
+            return res.json({ provider_name: p.name || token, provider_token: token, provider_calendar_id: p.calendar_id || '' });
+          }
+
+          // contains token, name, or parts
+          if (s.includes(token)) {
+            return res.json({ provider_name: p.name || token, provider_token: token, provider_calendar_id: p.calendar_id || '' });
+          }
+          if (name && s.includes(name)) {
+            return res.json({ provider_name: p.name || token, provider_token: token, provider_calendar_id: p.calendar_id || '' });
+          }
+          // match on last name or first name token fragments
+          const nameParts = name ? name.split(/\s+/).filter(Boolean) : [];
+          for (const np of nameParts) {
+            if (np && s.includes(np)) {
+              return res.json({ provider_name: p.name || token, provider_token: token, provider_calendar_id: p.calendar_id || '' });
+            }
+          }
+          // match on calendar local part (before @)
+          if (cal) {
+            const calLocal = cal.split('@')[0];
+            if (calLocal && s.includes(calLocal)) {
+              return res.json({ provider_name: p.name || token, provider_token: token, provider_calendar_id: p.calendar_id || '' });
+            }
+          }
+        }
+
+        // No match: return raw provider_name but empty token (trigger clarify)
+        return res.json({ provider_name: raw || '', provider_token: '', provider_calendar_id: '' });
+      } catch (err) {
+        console.error('Error in /parse-provider handler:', err && err.stack ? err.stack : err);
+        return res.status(200).json({ provider_name: '', provider_token: '', provider_calendar_id: '' });
+      }
+    });
+  } catch (err) {
+    console.warn('Could not attach /parse-provider:', err && err.message ? err.message : err);
+  }
+}
 
 async function startMainApp() {
   try {
     const mainApp = require('./GoogleCalendarWebhook.js');
-    // --- Paste this immediately after:
-    // const mainApp = require('./GoogleCalendarWebhook.js');
-    // and BEFORE mainApp.listen(...)
 
-    // If mainApp is an Express app, attach a lightweight /parse-name POST handler
-    try {
-      if (mainApp && typeof mainApp.post === 'function') {
-        // Ensure JSON body parsing is available (harmless if already set)
-        try { mainApp.use(require('express').json()); } catch (e) { }
-
-        mainApp.post('/parse-name', (req, res) => {
-          // Accept either { user_message: "..." } or Retell-style { args: { user_message: "..."} }
-          const maybeArgs = req.body && req.body.args ? req.body.args : null;
-          const user_message = (req.body && (req.body.user_message || req.body.text)) ||
-            (maybeArgs && maybeArgs.user_message) ||
-            '';
-
-          function splitName(raw) {
-            if (!raw || !String(raw).trim()) return { full_name: "", first_name: "", last_name: "" };
-            const s = String(raw).trim();
-            const suffixRegex = /\b(Jr\.|Sr\.|II|III|IV)\b\.?$/i;
-            const orig = s;
-            const noSuffix = s.replace(suffixRegex, '').trim();
-            const parts = noSuffix.split(/\s+/);
-            const first = parts.length ? parts[0] : "";
-            const last = parts.length > 1 ? parts[parts.length - 1] : "";
-            return { full_name: orig, first_name: first, last_name: last };
-          }
-
-          return res.status(200).json(splitName(user_message));
-        });
-      }
-    } catch (attachErr) {
-      console.warn('Could not attach /parse-name to mainApp:', attachErr && attachErr.message ? attachErr.message : attachErr);
-    }
+    // Attach helpers (if mainApp is an Express app)
+    attachParseName(mainApp);
+    attachParseProvider(mainApp);
 
     if (mainApp && typeof mainApp.listen === 'function') {
       const PORT = process.env.PORT || 8080;
@@ -87,36 +189,9 @@ async function startFallbackServer() {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
-  // Replace this map with an import from your providers.js when available.
-  // Keys are provider tokens (lowercase). Values include provider token and calendar email.
-  const PROVIDERS = {
-    'katherine-robins': { token: 'katherine-robins', calendar_id: 'katherine-robins@solreibehavioralhealth.com' },
-    'jodene-jensen': { token: 'jodene-jensen', calendar_id: 'jodene-jensen@solreibehavioralhealth.com' },
-    'megan-ramirez': { token: 'megan-ramirez', calendar_id: 'megan-ramirez@solreibehavioralhealth.com' }
-  };
-
-  function findProvider(tokenOrEmail) {
-    if (!tokenOrEmail) return null;
-    const s = String(tokenOrEmail).toLowerCase();
-    // direct token match
-    if (PROVIDERS[s]) return PROVIDERS[s];
-    // email match
-    for (const k of Object.keys(PROVIDERS)) {
-      if (PROVIDERS[k].calendar_id && PROVIDERS[k].calendar_id.toLowerCase() === s) {
-        return PROVIDERS[k];
-      }
-    }
-    return null;
-  }
-
-  function compactObject(obj) {
-    const out = {};
-    for (const k of Object.keys(obj || {})) {
-      const v = obj[k];
-      if (v !== undefined && v !== null && v !== '') out[k] = v;
-    }
-    return out;
-  }
+  // attach parse-name and parse-provider to fallback app
+  attachParseName(app);
+  attachParseProvider(app);
 
   // Health check
   app.get('/', (req, res) => {
@@ -127,40 +202,7 @@ async function startFallbackServer() {
     });
   });
 
-  // NEW: simple name parser endpoint for Retell Custom Function
-  // Accepts:
-  //  - POST { "user_message": "Wayne Jones" }
-  //  - or POST { "args": { "user_message": "Wayne Jones" } } (some Retell payloads)
-  app.post('/parse-name', (req, res) => {
-    try {
-      // Extract user_message from common locations
-      const maybeArgs = req.body && req.body.args ? req.body.args : null;
-      const user_message = (req.body && (req.body.user_message || req.body.text)) ||
-        (maybeArgs && maybeArgs.user_message) ||
-        '';
-      // Minimal splitter: first token = first_name, last token = last_name
-      function splitName(raw) {
-        if (!raw || !String(raw).trim()) return { full_name: "", first_name: "", last_name: "" };
-        const s = String(raw).trim();
-        const suffixRegex = /\b(Jr\.|Sr\.|II|III|IV)\b\.?$/i;
-        const orig = s;
-        const noSuffix = s.replace(suffixRegex, '').trim();
-        const parts = noSuffix.split(/\s+/);
-        const first = parts.length ? parts[0] : "";
-        const last = parts.length > 1 ? parts[parts.length - 1] : "";
-        return { full_name: orig, first_name: first, last_name: last };
-      }
-
-      const parsed = splitName(user_message);
-      // Always return top-level JSON object only
-      return res.status(200).json(parsed);
-    } catch (err) {
-      console.error('Error in /parse-name:', err && err.stack ? err.stack : err);
-      return res.status(200).json({ full_name: "", first_name: "", last_name: "" });
-    }
-  });
-
-  // Robust /availability handler
+  // Robust /availability handler (uses PROVIDERS and findProvider)
   app.post('/availability', async (req, res) => {
     try {
       // Retell sends args inside req.body.args
