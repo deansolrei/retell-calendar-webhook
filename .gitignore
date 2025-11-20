@@ -11,3 +11,10 @@ build/
 coverage/
 .vscode/
 .idea/
+# local logs / backups
+server.log
+*.bak
+
+# node
+node_modules/
+.env
