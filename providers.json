@@ -3,6 +3,7 @@
     "token": "jodene-jensen",
     "id": "provider-001",
     "display_name": "Jodene Jensen, PMHNP-BC",
+    "name": "Jodene Jensen",
     "licensed_states": [
       "AK",
       "AZ",
@@ -27,6 +28,7 @@
       "DC"
     ],
     "calendar_id": "c_0e62110eb84029697859881dfaec2f8fd5baf305545bf992722e3ef56f5dc49f@group.calendar.google.com",
+    "calendar_email": "jodene-jensen@solreibehavioralhealth.com",
     "telehealth": true,
     "insurances": [
       "Cigna",
@@ -37,6 +39,7 @@
     "token": "katherine-robins",
     "id": "provider-002",
     "display_name": "Katherine Robins, PMHNP-BC",
+    "name": "Katherine Robins",
     "licensed_states": [
       "AK",
       "FL",
@@ -44,6 +47,7 @@
       "WA"
     ],
     "calendar_id": "c_974ae1c49d40ac0b1168f90f5bcca722cad724ff7d75f79d1797de1d50378633@group.calendar.google.com",
+    "calendar_email": "katherine-robins@solreibehavioralhealth.com",
     "telehealth": true,
     "insurances": []
   },
@@ -51,6 +55,7 @@
     "token": "megan-ramirez",
     "id": "provider-003",
     "display_name": "Megan Ramirez, PMHNP-BC",
+    "name": "Megan Ramirez",
     "licensed_states": [
       "FL",
       "KS",
@@ -60,6 +65,7 @@
       "VT"
     ],
     "calendar_id": "c_fe9450004f174ae74615e904639bbb7a888c594509b87567041d5d726299e7a3@group.calendar.google.com",
+    "calendar_email": "megan-ramirez@solreibehavioralhealth.com",
     "telehealth": true,
     "insurances": []
   }
