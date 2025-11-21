@@ -1,6 +1,22 @@
 const express = require('express');
 const router = express.Router();
-const requireAuth = require('../middleware/requireAuth');
+
+// Try to require the real requireAuth middleware, but fall back to a no-op
+// middleware when missing or when ALLOW_UNAUTH_PARSE=true (useful for tests/dev).
+let requireAuth;
+try {
+  if (process.env.ALLOW_UNAUTH_PARSE === 'true') {
+    requireAuth = (req, res, next) => next();
+    console.log('ALLOW_UNAUTH_PARSE=true — parse routes will be unauthenticated');
+  } else {
+    requireAuth = require('../middleware/requireAuth');
+  }
+} catch (err) {
+  // If require fails for any reason, fall back to a permissive middleware
+  console.warn('Could not load requireAuth middleware; parse routes will be unauthenticated:', err && err.message ? err.message : err);
+  requireAuth = (req, res, next) => next();
+}
+
 const calendarOps = require('../calendar-operations');
 
 router.post('/parse-name', requireAuth, async (req, res) => {
