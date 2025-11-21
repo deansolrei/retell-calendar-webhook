@@ -1,222 +1,159 @@
+'use strict';
 /**
- * Calendar Operations - Enhanced scheduling rules
- *
- * - Enforces clinic default hours (Mon-Fri 08:00-18:00 ET)
- * - Allows per-provider overrides (e.g., weekend availability)
- * - Generates candidate start times aligned to 30-minute marks (hh:00, hh:30)
- * - Only offers starts that have at least `requiredFreeMinutes` free (default 60)
- * - Returns slots both in clinic/Eastern timezone (for booking) and in user's timezone (for display)
- * - Includes helpers to convert a user's chosen local time to an Eastern-time ISO range to pass to /book
- *
- * Dependencies:
- * - luxon (DateTime, Interval)
- * - googleapis calendar client (the `calendar` param used below)
- *
- * NOTE: Add provider-specific overrides to PROVIDER_SCHEDULES (keyed by calendarId).
+ * Minimal calendar-operations implementation
+ * - Exports: get_provider_availability, get_calendar_slots, book_provider_appointment
+ * - Auth: reads process.env.GOOGLE_CREDS or ./gcal-creds.json (service account)
+ * - Uses googleapis and luxon
  */
 
+const fs = require('fs');
+const path = require('path');
+const { google } = require('googleapis');
 const { DateTime, Interval } = require('luxon');
 
-const DEFAULT_TIMEZONE = 'America/New_York'; // Eastern time for clinic booking
-const SLOT_ALIGNMENT_MINUTES = 30;           // only hh:00 and hh:30 starts
-const DEFAULT_REQUIRED_FREE_MINUTES = 60;    // ensure at least 60 minutes free (55 appointment + 5 pad)
-const MIN_BOOKED_MINUTES = 30;               // 25 appointment + 5 pad => 30 booked minutes
-const MAX_BOOKED_MINUTES = 60;               // 55 appointment + 5 pad => 60 booked minutes
+const DEFAULT_TIMEZONE = process.env.DEFAULT_TIMEZONE || 'America/New_York';
+const DEFAULT_REQUIRED_FREE_MINUTES = 30;
 
-// Per-provider scheduling overrides. Replace placeholder IDs with actual calendar IDs.
-const PROVIDER_SCHEDULES = {
-    // 'provider_calendar_id@group.calendar.google.com': { allowWeekends: true, start_hour: 8, end_hour: 16, timezone: 'America/New_York' }
-};
+async function getJwtAuth(googleCredsEnv, impersonateUser) {
+  let creds;
+  if (googleCredsEnv && googleCredsEnv.trim()) {
+    creds = JSON.parse(googleCredsEnv);
+  } else {
+    const p = path.join(process.cwd(), 'gcal-creds.json');
+    if (!fs.existsSync(p)) throw new Error('No Google creds found in env or gcal-creds.json');
+    creds = JSON.parse(fs.readFileSync(p, 'utf8'));
+  }
 
-/**
- * Return scheduling rules for a calendarId (merge defaults with any provider overrides)
- */
-function getCalendarRules(calendarId) {
-    const override = PROVIDER_SCHEDULES[calendarId] || {};
-    return {
-        timezone: override.timezone || DEFAULT_TIMEZONE,
-        allowWeekends: typeof override.allowWeekends === 'boolean' ? override.allowWeekends : false,
-        start_hour: typeof override.start_hour === 'number' ? override.start_hour : 8,
-        end_hour: typeof override.end_hour === 'number' ? override.end_hour : 18
-    };
+  const jwt = new google.auth.JWT(
+    creds.client_email,
+    null,
+    creds.private_key,
+    ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
+    impersonateUser || undefined
+  );
+  await jwt.authorize();
+  return jwt;
 }
 
-/**
- * Fetch busy times for a date range (returns array of {start, end} ISO strings)
- */
-async function fetchBusyTimes(calendar, calendarId, startDateISO, endDateISO, timezone = DEFAULT_TIMEZONE) {
-    const startDT = DateTime.fromISO(startDateISO, { zone: timezone }).startOf('day');
-    const endDT = DateTime.fromISO(endDateISO, { zone: timezone }).endOf('day');
+function mergeBusyIntervals(events, tz) {
+  const intervals = events
+    .map(ev => {
+      const s = ev.start?.dateTime || ev.start?.date;
+      const e = ev.end?.dateTime || ev.end?.date;
+      if (!s || !e) return null;
+      const start = DateTime.fromISO(s, { zone: tz });
+      const end = DateTime.fromISO(e, { zone: tz });
+      if (!start.isValid || !end.isValid) return null;
+      return Interval.fromDateTimes(start, end);
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start);
 
-    const response = await calendar.freebusy.query({
-        requestBody: {
-            timeMin: startDT.toUTC().toISO(),
-            timeMax: endDT.toUTC().toISO(),
-            items: [{ id: calendarId }]
-        }
-    });
+  if (!intervals.length) return [];
 
-    return response?.data?.calendars?.[calendarId]?.busy || [];
-}
-
-/**
- * Helper: convert busy ranges (ISO strings) into Interval objects in the given timezone
- */
-function busyRangesToIntervals(busyRanges, timezone) {
-    return busyRanges.map(busy => {
-        const s = DateTime.fromISO(busy.start).setZone(timezone);
-        const e = DateTime.fromISO(busy.end).setZone(timezone);
-        return Interval.fromDateTimes(s, e);
-    });
-}
-
-/**
- * Generates candidate start DateTime objects for a day aligned to 30-minute boundaries.
- */
-function generateCandidateStartsForDay(checkDate, rules, requiredFreeMinutes = DEFAULT_REQUIRED_FREE_MINUTES) {
-    const { start_hour, end_hour } = rules;
-    const timezone = rules.timezone || DEFAULT_TIMEZONE;
-
-    const windowStart = checkDate.set({ hour: start_hour, minute: 0, second: 0, millisecond: 0 }).setZone(timezone);
-    const windowEnd = checkDate.set({ hour: end_hour, minute: 0, second: 0, millisecond: 0 }).setZone(timezone);
-
-    const candidates = [];
-    let cursor = windowStart;
-    const remainder = cursor.minute % SLOT_ALIGNMENT_MINUTES;
-    if (remainder !== 0) {
-        cursor = cursor.plus({ minutes: SLOT_ALIGNMENT_MINUTES - remainder }).startOf('minute');
-    }
-
-    while (cursor.plus({ minutes: requiredFreeMinutes }) <= windowEnd) {
-        candidates.push(cursor);
-        cursor = cursor.plus({ minutes: SLOT_ALIGNMENT_MINUTES });
-    }
-
-    return candidates;
-}
-
-/**
- * Check whether a candidate start (DateTime in calendar timezone) is available given busy intervals
- */
-function isCandidateAvailable(candidateStart, requiredFreeMinutes, busyIntervals) {
-    const candidateInterval = Interval.fromDateTimes(candidateStart, candidateStart.plus({ minutes: requiredFreeMinutes }));
-    return !busyIntervals.some(bi => bi.overlaps(candidateInterval));
-}
-
-/**
- * Find available slots across multiple days (server-side)
- */
-async function findAvailableSlotsMultiDay(calendar, calendarId, startDateISO, daysToCheck, opts = {}) {
-    const {
-        maxSlots = 4,
-        requiredFreeMinutes = DEFAULT_REQUIRED_FREE_MINUTES,
-        userTimezone = null
-    } = opts;
-
-    const rules = getCalendarRules(calendarId);
-    const calendarTz = rules.timezone || DEFAULT_TIMEZONE;
-
-    const allSlots = [];
-    const startDate = DateTime.fromISO(startDateISO, { zone: calendarTz }).startOf('day');
-    const now = DateTime.now().setZone(calendarTz);
-
-    for (let dayOffset = 0; dayOffset < daysToCheck && allSlots.length < maxSlots; dayOffset++) {
-        const checkDate = startDate.plus({ days: dayOffset });
-        const weekday = checkDate.weekday; // 1 = Mon ... 7 = Sun
-        if (!rules.allowWeekends && (weekday === 6 || weekday === 7)) continue;
-
-        const dayStartISO = checkDate.toISODate();
-        const busyRanges = await fetchBusyTimes(calendar, calendarId, dayStartISO, dayStartISO, calendarTz);
-        const busyIntervals = busyRangesToIntervals(busyRanges, calendarTz);
-
-        const candidates = generateCandidateStartsForDay(checkDate, rules, requiredFreeMinutes);
-
-        let filteredCandidates = candidates;
-        if (checkDate.hasSame(now, 'day')) {
-            filteredCandidates = candidates.filter(c => c.plus({ minutes: requiredFreeMinutes }) > now);
-        }
-
-        for (const candidateStart of filteredCandidates) {
-            if (allSlots.length >= maxSlots) break;
-            const available = isCandidateAvailable(candidateStart, requiredFreeMinutes, busyIntervals);
-            if (!available) continue;
-
-            const startISOet = candidateStart.setZone(DEFAULT_TIMEZONE).toISO();
-            const endISOet = candidateStart.plus({ minutes: requiredFreeMinutes }).setZone(DEFAULT_TIMEZONE).toISO();
-
-            let startISOuser = null;
-            let endISOuser = null;
-            let display = `${candidateStart.toFormat('EEE MMM d')} at ${candidateStart.toFormat('h:mm a')} ET`;
-
-            if (userTimezone) {
-                const startUser = candidateStart.setZone(userTimezone);
-                const endUser = candidateStart.plus({ minutes: requiredFreeMinutes }).setZone(userTimezone);
-                startISOuser = startUser.toISO();
-                endISOuser = endUser.toISO();
-                display = `${startUser.toFormat('EEE MMM d')} at ${startUser.toFormat('h:mm a')} (${userTimezone}) — ${candidateStart.toFormat('h:mm a')} ET`;
-            }
-
-            allSlots.push({
-                date: candidateStart.toISODate(),
-                start_iso_et: startISOet,
-                end_iso_et: endISOet,
-                start_iso_user: startISOuser,
-                end_iso_user: endISOuser,
-                display
-            });
-        }
-    }
-
-    return allSlots;
-}
-
-/**
- * Convert a user's chosen local start ISO and bookedMinutes to an Eastern-time booking range.
- */
-function convertUserSelectionToEastern(userStartIso, userTimezone = null, bookedMinutes = MAX_BOOKED_MINUTES) {
-    let startDT;
-    if (userTimezone && !userStartIso.endsWith('Z') && !userStartIso.includes('+') && !userStartIso.includes('-')) {
-        startDT = DateTime.fromISO(userStartIso, { zone: userTimezone });
+  const merged = [];
+  let cur = intervals[0];
+  for (let i = 1; i < intervals.length; i++) {
+    const next = intervals[i];
+    if (cur.overlaps(next) || cur.abutsStart(next) || next.start <= cur.end) {
+      cur = Interval.fromDateTimes(cur.start, cur.end > next.end ? cur.end : next.end);
     } else {
-        startDT = DateTime.fromISO(userStartIso).setZone(userTimezone || DEFAULT_TIMEZONE);
+      merged.push(cur);
+      cur = next;
     }
-
-    const endDTUser = startDT.plus({ minutes: bookedMinutes });
-    const startET = startDT.setZone(DEFAULT_TIMEZONE);
-    const endET = endDTUser.setZone(DEFAULT_TIMEZONE);
-
-    return {
-        start_iso_et: startET.toISO(),
-        end_iso_et: endET.toISO()
-    };
+  }
+  merged.push(cur);
+  return merged;
 }
 
-/**
- * Convenience: create Human-friendly display label for a slot
- */
-function formatSlotLabel(slot) {
-    if (slot.start_iso_user && slot.start_iso_et) {
-        const startUser = DateTime.fromISO(slot.start_iso_user);
-        const startET = DateTime.fromISO(slot.start_iso_et).setZone(DEFAULT_TIMEZONE);
-        return `${startUser.toFormat('EEE MMM d @ h:mm a')} (${startUser.zoneName}) / ${startET.toFormat('h:mm a')} ET`;
+function computeFreeSlots(busyIntervals, windowInterval, slotMinutes) {
+  const slots = [];
+  let cursor = windowInterval.start;
+  for (const busy of busyIntervals) {
+    if (busy.end <= windowInterval.start) continue;
+    if (busy.start >= windowInterval.end) break;
+
+    if (busy.start > cursor) {
+      let availStart = cursor;
+      let availEnd = busy.start;
+      while (availStart.plus({ minutes: slotMinutes }) <= availEnd) {
+        const s = availStart;
+        const e = availStart.plus({ minutes: slotMinutes });
+        slots.push({ start: s.toISO(), end: e.toISO(), timeZone: windowInterval.start.zoneName });
+        availStart = availStart.plus({ minutes: slotMinutes });
+      }
     }
-    if (slot.start_iso_et) {
-        const s = DateTime.fromISO(slot.start_iso_et).setZone(DEFAULT_TIMEZONE);
-        return `${s.toFormat('EEE MMM d @ h:mm a')} ET`;
-    }
-    return slot.display || 'Unavailable';
+    if (busy.end > cursor) cursor = busy.end;
+  }
+
+  while (cursor.plus({ minutes: slotMinutes }) <= windowInterval.end) {
+    const s = cursor;
+    const e = cursor.plus({ minutes: slotMinutes });
+    slots.push({ start: s.toISO(), end: e.toISO(), timeZone: windowInterval.start.zoneName });
+    cursor = cursor.plus({ minutes: slotMinutes });
+  }
+
+  return slots;
+}
+
+async function listEvents(calendar, calendarId, timeMinISO, timeMaxISO) {
+  const res = await calendar.events.list({
+    calendarId,
+    singleEvents: true,
+    orderBy: 'startTime',
+    timeMin: timeMinISO,
+    timeMax: timeMaxISO,
+    maxResults: 2500
+  });
+  return res.data.items || [];
+}
+
+async function get_calendar_slots({ calendarId, requestedDate, slotDurationMinutes = DEFAULT_REQUIRED_FREE_MINUTES, daysToCheck = 1, timezone = DEFAULT_TIMEZONE, googleCredsEnv = null, impersonateUser = null }) {
+  const auth = await getJwtAuth(googleCredsEnv || process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON, impersonateUser || process.env.GOOGLE_IMPERSONATE_USER);
+  const calendar = google.calendar({ version: 'v3', auth });
+
+  const date = requestedDate ? DateTime.fromISO(requestedDate, { zone: timezone }) : DateTime.now().setZone(timezone);
+  if (!date.isValid) throw new Error('Invalid requestedDate');
+
+  const slotsByDay = [];
+
+  for (let d = 0; d < daysToCheck; d++) {
+    const day = date.plus({ days: d });
+    const dayStart = day.set({ hour: 8, minute: 0, second: 0, millisecond: 0 });
+    const dayEnd = day.set({ hour: 18, minute: 0, second: 0, millisecond: 0 });
+
+    const timeMinISO = dayStart.toISO();
+    const timeMaxISO = dayEnd.toISO();
+
+    const events = await listEvents(calendar, calendarId, timeMinISO, timeMaxISO);
+    const busy = mergeBusyIntervals(events, timezone);
+    const window = Interval.fromDateTimes(dayStart, dayEnd);
+    const slots = computeFreeSlots(busy, window, Number(slotDurationMinutes));
+    slotsByDay.push({ date: day.toISODate(), slots });
+  }
+
+  return { ok: true, timezone, days: slotsByDay };
+}
+
+async function get_provider_availability(opts) {
+  return get_calendar_slots(opts);
+}
+
+async function book_provider_appointment({ calendarId, event, googleCredsEnv = null, impersonateUser = null, sendUpdates = 'all' }) {
+  const auth = await getJwtAuth(googleCredsEnv || process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON, impersonateUser || process.env.GOOGLE_IMPERSONATE_USER);
+  const calendar = google.calendar({ version: 'v3', auth });
+  const insertRes = await calendar.events.insert({
+    calendarId,
+    resource: event,
+    sendUpdates
+  });
+  return { ok: true, event: insertRes.data };
 }
 
 module.exports = {
-    DEFAULT_TIMEZONE,
-    SLOT_ALIGNMENT_MINUTES,
-    DEFAULT_REQUIRED_FREE_MINUTES,
-    MIN_BOOKED_MINUTES,
-    MAX_BOOKED_MINUTES,
-    PROVIDER_SCHEDULES,
-    getCalendarRules,
-    fetchBusyTimes,
-    findAvailableSlotsMultiDay,
-    convertUserSelectionToEastern,
-    formatSlotLabel
+  get_provider_availability,
+  get_calendar_slots,
+  book_provider_appointment,
+  DEFAULT_TIMEZONE,
+  DEFAULT_REQUIRED_FREE_MINUTES
 };
