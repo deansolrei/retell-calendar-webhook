@@ -3,18 +3,18 @@ const router = express.Router();
 
 // Try to require a module path and mount it at '/'
 function tryMount(path) {
-    try {
-        const mod = require(path);
-        if (!mod) return;
-        // If the module exports a Router or middleware function, mount it.
-        if (typeof mod === 'function') {
-            router.use('/', mod);
-        } else if (mod && typeof mod === 'object') {
-            router.use('/', mod);
-        }
-    } catch (err) {
-        // ignore missing modules - allows incremental migration
+  try {
+    const mod = require(path);
+    if (!mod) return;
+    // If the module exports a Router or middleware function, mount it.
+    if (typeof mod === 'function') {
+      router.use('/', mod);
+    } else if (mod && typeof mod === 'object') {
+      router.use('/', mod);
     }
+  } catch (err) {
+    // ignore missing modules - allows incremental migration
+  }
 }
 
 // Attempt to load existing route files that may be at repo root
