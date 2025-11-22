@@ -1,32 +1,30 @@
+/**
+ * routes/index.js - central router that mounts individual route modules.
+ *
+ * Place this file at ./routes/index.js and move your routes_*.js files into ./routes/
+ * so their relative requires (../middleware/requireAuth) resolve to ../middleware/requireAuth.js
+ */
+
 const express = require('express');
 const router = express.Router();
 
-// Try to require a module path and mount it at '/'
-function tryMount(path) {
+// Each route module should export an express.Router
+const tryMount = (modPath, mountPoint = '/') => {
     try {
-        const mod = require(path);
-        if (!mod) return;
-        // If the module exports a Router or middleware function, mount it.
-        if (typeof mod === 'function') {
-            router.use('/', mod);
-        } else if (mod && typeof mod === 'object') {
-            router.use('/', mod);
-        }
+        const r = require(modPath);
+        router.use(mountPoint, r);
+        console.log(`Mounted ${modPath} at ${mountPoint}`);
     } catch (err) {
-        // ignore missing modules - allows incremental migration
+        console.warn(`Skipping optional module ${modPath}:`, err && err.message ? err.message : err);
     }
-}
+};
 
-// Attempt to load existing route files that may be at repo root
-tryMount('../routes_availability');
-tryMount('../routes_slots');
-tryMount('../routes_book');
-tryMount('../routes_book_provider_appointment');
-tryMount('../routes_provider_lookup');
-tryMount('../routes_parse');
-tryMount('../routes_index'); // in case an index file was created at repo root
-
-// Fallback health endpoint (if no routes mounted)
-router.get('/health', (req, res) => res.json({ ok: true }));
+// Mount provided route modules (names expected in ./routes/)
+tryMount('./routes_provider_lookup', '/');
+tryMount('./routes_availability', '/');
+tryMount('./routes_book', '/');
+tryMount('./routes_slots', '/');
+tryMount('./routes_parse', '/');
+tryMount('./routes_book_provider_appointment', '/');
 
 module.exports = router;

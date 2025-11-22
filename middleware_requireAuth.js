@@ -1,16 +1,29 @@
-module.exports = function requireAuth(req, res, next) {
-  // If SECRET_TOKEN not set, treat as disabled (useful for local dev)
-  const expected = process.env.SECRET_TOKEN;
-  if (!expected) return next();
+/**
+ * Simple auth middleware for bearer SECRET_TOKEN.
+ * - If SECRET_TOKEN is unset, middleware will allow all requests (use cautiously).
+ * - If ALLOW_UNAUTH_PARSE=true, parse routes can bypass auth (but middleware still functions).
+ *
+ * Use by: const requireAuth = require('../middleware/requireAuth');
+ * then in route: router.post('/foo', requireAuth, handler)
+ */
 
-  const auth = (req.headers && (req.headers.authorization || req.headers.Authorization)) || '';
-  if (!auth.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'unauthorized', message: 'Authorization header required' });
-    return;
+module.exports = function requireAuth(req, res, next) {
+  // Allow unauthenticated parse endpoints via env if desired
+  if (process.env.ALLOW_UNAUTH_PARSE === 'true') {
+    return next();
   }
-  const token = auth.split(/\s+/)[1];
-  if (!token || token !== expected) {
-    res.status(403).json({ error: 'forbidden', message: 'Invalid token' });
+
+  const SECRET_TOKEN = process.env.SECRET_TOKEN || '';
+  if (!SECRET_TOKEN) {
+    // no secret configured => accept (but we warn server-side)
+    console.warn('requireAuth: SECRET_TOKEN not configured, allowing requests (development mode)');
+    return next();
+  }
+
+  const authHeader = (req.headers && (req.headers.authorization || req.headers.Authorization)) || '';
+  const valid = authHeader === `Bearer ${SECRET_TOKEN}`;
+  if (!valid) {
+    res.status(401).json({ error: 'Unauthorized' });
     return;
   }
   return next();

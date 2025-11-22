@@ -1,9 +1,15 @@
 'use strict';
 /**
- * Minimal calendar-operations implementation
- * - Exports: get_provider_availability, get_calendar_slots, book_provider_appointment
- * - Auth: reads process.env.GOOGLE_CREDS or ./gcal-creds.json (service account)
- * - Uses googleapis and luxon
+ * Calendar operations + small parsing helpers.
+ *
+ * Exports:
+ *  - get_provider_availability
+ *  - get_calendar_slots
+ *  - book_provider_appointment
+ *  - parse_patient_name
+ *  - parse_provider_name
+ *
+ * Uses googleapis/luxon where needed.
  */
 
 const fs = require('fs');
@@ -11,8 +17,9 @@ const path = require('path');
 const { google } = require('googleapis');
 const { DateTime, Interval } = require('luxon');
 
+// default config
 const DEFAULT_TIMEZONE = process.env.DEFAULT_TIMEZONE || 'America/New_York';
-const DEFAULT_REQUIRED_FREE_MINUTES = 30;
+const DEFAULT_REQUIRED_FREE_MINUTES = Number(process.env.DEFAULT_REQUIRED_FREE_MINUTES || 30);
 
 async function getJwtAuth(googleCredsEnv, impersonateUser) {
   let creds;
@@ -35,6 +42,7 @@ async function getJwtAuth(googleCredsEnv, impersonateUser) {
   return jwt;
 }
 
+// Utilities to compute free time slots
 function mergeBusyIntervals(events, tz) {
   const intervals = events
     .map(ev => {
@@ -150,10 +158,104 @@ async function book_provider_appointment({ calendarId, event, googleCredsEnv = n
   return { ok: true, event: insertRes.data };
 }
 
+// --------------------- parsing helpers ---------------------
+
+// parse_patient_name: accepts payload with user_message or name string
+function splitName(raw) {
+  if (!raw || !String(raw).trim()) return { full_name: "", first_name: "", last_name: "" };
+  const s = String(raw).trim();
+  const suffixRegex = /\b(Jr\.|Sr\.|II|III|IV)\b\.?$/i;
+  const orig = s;
+  const noSuffix = s.replace(suffixRegex, '').trim();
+  const parts = noSuffix.split(/\s+/);
+  const first = parts.length ? parts[0] : "";
+  const last = parts.length > 1 ? parts[parts.length - 1] : "";
+  return { full_name: orig, first_name: first, last_name: last };
+}
+
+async function parse_patient_name(payload) {
+  const raw = (payload && (payload.user_message || payload.text || payload.patient_name)) || '';
+  return splitName(raw);
+}
+
+// parse_provider_name: attempt to map a freeform name/token/email to a known provider
+function loadProviders() {
+  // prefer providers.js if present (exposes helper functions), else providers.json
+  try {
+    const pmod = require('./providers');
+    if (pmod && typeof pmod.getProviders === 'function') {
+      return pmod.getProviders();
+    }
+    // if providers.js exports an object
+    if (pmod && typeof pmod === 'object' && Object.keys(pmod).length) return pmod;
+  } catch (e) {
+    // try JSON file fallback
+    try {
+      const js = require('./providers.json');
+      return js;
+    } catch (e2) {
+      return {};
+    }
+  }
+  return {};
+}
+
+async function parse_provider_name(payload) {
+  const raw = (payload && (payload.provider_display_name || payload.user_message || payload.text)) || '';
+  const s = String(raw || '').trim().toLowerCase();
+  if (!s) return { provider_name: '', provider_token: '', provider_calendar_id: '' };
+
+  const providers = loadProviders();
+
+  // Normalize providers shape: accept map-of-key -> { token, calendar_id, name }
+  const list = [];
+  for (const k of Object.keys(providers)) {
+    const p = providers[k];
+    // if providers.json is keyed by tokens, preserve token key
+    const token = (p && (p.token || k)) || k;
+    const name = (p && p.name) || token;
+    const cal = (p && p.calendar_id) || '';
+    list.push({ token: String(token).toLowerCase(), name: String(name).toLowerCase(), calendar_id: String(cal).toLowerCase(), displayName: (p && p.name) || name });
+  }
+
+  // negatives
+  const negatives = ["don't have", "dont have", "no provider", "nope", "none", "no"];
+  for (const n of negatives) if (s.includes(n)) return { provider_name: '', provider_token: '', provider_calendar_id: '' };
+
+  // try exact token / email match, contains, name parts, local calendar prefix
+  for (const p of list) {
+    if (s === p.token || s === p.calendar_id) {
+      return { provider_name: p.displayName || p.token, provider_token: p.token, provider_calendar_id: p.calendar_id };
+    }
+  }
+  for (const p of list) {
+    if (s.includes(p.token) || (p.name && s.includes(p.name))) {
+      return { provider_name: p.displayName || p.token, provider_token: p.token, provider_calendar_id: p.calendar_id };
+    }
+    const nameParts = p.name ? p.name.split(/\s+/).filter(Boolean) : [];
+    for (const np of nameParts) {
+      if (np && s.includes(np)) {
+        return { provider_name: p.displayName || p.token, provider_token: p.token, provider_calendar_id: p.calendar_id };
+      }
+    }
+    if (p.calendar_id) {
+      const calLocal = p.calendar_id.split('@')[0];
+      if (calLocal && s.includes(calLocal)) {
+        return { provider_name: p.displayName || p.token, provider_token: p.token, provider_calendar_id: p.calendar_id };
+      }
+    }
+  }
+
+  // fallback: echo user input
+  return { provider_name: raw || '', provider_token: '', provider_calendar_id: '' };
+}
+
 module.exports = {
   get_provider_availability,
   get_calendar_slots,
   book_provider_appointment,
+  parse_patient_name,
+  parse_provider_name,
   DEFAULT_TIMEZONE,
   DEFAULT_REQUIRED_FREE_MINUTES
 };
