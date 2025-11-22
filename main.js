@@ -2,13 +2,13 @@
 const express = require('express');
 
 const bodyParser = require('body-parser');
-<<<<<<< HEAD
+HEAD
 
 const fs = require('fs');
 
-=======
+
 const fs = require('fs');
->>>>>>> main
+main
 const path = require('path');
 
 const PORT = process.env.PORT || 8080;
@@ -17,10 +17,10 @@ const app = express();
 
 // parse JSON bodies for all incoming requests
 app.use(bodyParser.json({ limit: '512kb' }));
-<<<<<<< HEAD
-=======
+HEAD
 
->>>>>>> main
+
+main
 // Try to mount a routes index if present (recommended: place your route modules in ./routes/)
 try {
   const routes = require('./routes'); // expects ./routes/index.js
@@ -44,15 +44,15 @@ try {
     app.get('/', (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
   }
 }
-<<<<<<< HEAD
+HEAD
 // Generic health (always available)
 app.get('/health', (_req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
-=======
+
 
 // Generic health (always available)
 app.get('/health', (_req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
 
->>>>>>> main
+main
 // Error handler (last)
 app.use((err, req, res, next) => {
   console.error('UNHANDLED ERROR', err && (err.stack || err.message || err));
