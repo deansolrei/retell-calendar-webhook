@@ -1,70 +1,58 @@
+'use strict';
 
 const express = require('express');
-
-const bodyParser = require('body-parser');
-HEAD
-
-const fs = require('fs');
-
-
-const fs = require('fs');
-main
+const fs = require('fs');    // single fs declaration
 const path = require('path');
 
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT) || 8080;
 
 const app = express();
 
 // parse JSON bodies for all incoming requests
-app.use(bodyParser.json({ limit: '512kb' }));
-HEAD
+app.use(express.json({ limit: '512kb' }));
 
-
-main
-// Try to mount a routes index if present (recommended: place your route modules in ./routes/)
+// Try to mount google_calendar_webhook.js (preferred) which itself mounts ./routes/*.
+// If not present, fall back to ./routes_index or ./routes folder index.
+let mounted = false;
 try {
-  const routes = require('./routes'); // expects ./routes/index.js
-  app.use('/', routes);
-  console.log('Mounted ./routes (router index) for endpoint handlers');
+  const gcw = require('./google_calendar_webhook');
+  if (gcw && typeof gcw === 'function' || (gcw && gcw.stack && typeof gcw.use === 'function')) {
+    // if it exports a router or an app, mount it at root
+    app.use('/', gcw);
+    console.log('Mounted google_calendar_webhook router (./google_calendar_webhook.js)');
+    mounted = true;
+  }
 } catch (err) {
-  // Fallback: try router-based GoogleCalendarWebhook (exports a router)
+  // ignore, try next option
+}
+
+if (!mounted) {
   try {
-    const gcw = require('./google_calendar_webhook');
-    if (gcw && typeof gcw === 'function') {
-      app.use('/', gcw);
-      console.log('Mounted router from google_calendar_webhook.js');
-    } else {
-      console.warn('No ./routes and google_calendar_webhook did not export a router — starting with minimal handlers');
-      // Minimal health endpoint
-      app.get('/', (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
-    }
-  } catch (err2) {
-    console.warn('Failed to mount google_calendar_webhook router:', err2 && err2.message ? err2.message : err2);
-    // Minimal health endpoint
-    app.get('/', (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
+    // try routes_index.js or a /routes folder index
+    const routes = require('./routes_index') || require('./routes');
+    app.use('/', routes);
+    console.log('Mounted routes from ./routes_index or ./routes');
+    mounted = true;
+  } catch (err) {
+    console.warn('No route modules found to mount; running with minimal handlers');
   }
 }
-HEAD
-// Generic health (always available)
+
+// Ensure there is always a health endpoint
 app.get('/health', (_req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
 
-
-// Generic health (always available)
-app.get('/health', (_req, res) => res.json({ ok: true, timestamp: new Date().toISOString() }));
-
-main
 // Error handler (last)
 app.use((err, req, res, next) => {
   console.error('UNHANDLED ERROR', err && (err.stack || err.message || err));
   try {
     res.status(500).json({ error: 'server_error', message: 'Internal error' });
   } catch (e) {
-    // fallback if response already sent
     console.error('Failed to send error response:', e && e.message ? e.message : e);
   }
-  next && next();
+  if (typeof next === 'function') next();
 });
 
+// Start server (Cloud Run requires listening on process.env.PORT)
 app.listen(PORT, () => {
   console.log(`Calendar API Server running on port ${PORT}`);
   if (!process.env.SECRET_TOKEN) {
