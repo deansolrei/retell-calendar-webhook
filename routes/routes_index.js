@@ -10,13 +10,13 @@ const router = express.Router();
 
 // Each route module should export an express.Router
 const tryMount = (modPath, mountPoint = '/') => {
-  try {
-    const r = require(modPath);
-    router.use(mountPoint, r);
-    console.log(`Mounted ${modPath} at ${mountPoint}`);
-  } catch (err) {
-    console.warn(`Skipping optional module ${modPath}:`, err && err.message ? err.message : err);
-  }
+    try {
+        const r = require(modPath);
+        router.use(mountPoint, r);
+        console.log(`Mounted ${modPath} at ${mountPoint}`);
+    } catch (err) {
+        console.warn(`Skipping optional module ${modPath}:`, err && err.message ? err.message : err);
+    }
 };
 
 // Mount provided route modules (names expected in ./routes/)
