@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "retell-ai-agent-calendar",
+  "private_key_id": "78323bc6579ad9d5398704efdc441bb60b30de28",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQC0d9eYiKFmFam6\nj56FQ/7ZIOluA6auywLne91a3LZzETkRCa2J7K/fZKKkw9d/JTdn6vZmr20MzY2a\naN4OIDg20tREweNaEYEEoyiUaEBSrpIwSqdkGLjTXzcC5sbxu3tFeVSaMV4ixxMB\n6Zbr9c1vbOqbQjH7ObbXhRXGTTcJxMUzDk9Z6pYAuUueHoxoUyUb9vZxplZ1FAk3\npup8H3J/0AB/E+1xLAtoQEaZE1gvEbN4U+hYjMsAIoNwc2ouNlOoqLpDAMrCfV96\nE1FxYrV3D8CKmnxNuQFTzuoLOfuln2DvGlfbIAlkzQJbRVjFf89GIb8qnKyn84Px\nnyN2nqY1AgMBAAECggEAGMEViB05slSHXwlDL7l3dBYRHt+OVgyPveveHZAH0LnM\nj5s5vCEEsMpPivU4En8q3ey7VrN6bFantUXsK5jczRxXNIU558ld3qJ4tv6j0BOV\nBt2+nzrK42d8lr/MCy1xx8JQSgQ6it+uqkT9yCkDwGR6u8g1LeYpP9/H8Fb4FTU2\nbgo3aDi/oT6P0uNPkabnzDaY9/HvYdQ9zw39brt9T1attUmgmE+GtDomwgPzsszb\nlRtUprJ97O3NsYUPw8SRaR9Q0JtTEs/fN+mXgZnrIbOuIqS+j5OcfcbXPGdf3hun\naINURwTbenA64SRz1bP3ue3LMRLdt9LKoS5+GllcgQKBgQD1y+s5JbUP4KRkX+kJ\n+l7OxqKKrX3F2Qnf1vvVqlR/aQsQkuRu4UvdzftoW91z81rewvvogXRyw+/fZeIH\ngxLubk2SxvLniuYWNTfsLvKELf0LHbhPoo+vWIBGmKcki3XRwZ1jtpfDeP5eQRpd\nFv+y6gQtUB11jQEYwxP95tvVwQKBgQC79a2ITS33ozOdUQAddobmJGTVSf3z9elk\n5ti3l24VKtirv36YLfAC5KR/HnLbK5DUrk/uz01oyG34dEFpesJsg0frWy/igFa2\nVJFewtigs22kfHMw8gJKJ0u0dLwYvmR3Anc/+ASUBuXTuHOaEevt4yCn+F5NDl+w\nVzEijCU1dQKBgQCVwuCYWkQ+31XqnpGD9dvsSxTgQCMA+GPO0dNxdS20z9DhEU9D\ny9wI0idbh5Wfv2ffkJgiKzZDcuTljdMxVoijY+u6AaQgtf3JDDX9nwE+zjJ+omYZ\nh2fao6bM3NgCKULpQfnetnMzs7XwweQJUikL3xAad9TrObWwW7QDoLTTQQKBgQCe\nACiu4koY2E0EGlohakh93+wPS5K56GcY1eEpe5cjHhBjV6cgX8VZeUA6R6s/SAEI\nd7tjwUmOIqYm6/ssovAa7cSgONgo6794p+BHqz0U4Z/yXFcsttNr6FqASHzxw+KK\nFD2QPXoDwUSjVHOA+T29jGcgK+2BkuqnPrRkGTESHQKBgQCrHZgqzoIO1WZ7tqmI\n1ho7ZKRy/XiDpJBGgxh4srWmZSn/w82i5a9/2QPnH0GA+W/0fR5oBqhK5Ke1GhUB\n9zqi57lLnlxLxArC/IHXQEab2gv2e3ye1Ol6PKiiGapwYXhw9tOl5o0Y+WjyRhz6\nVNljR5Xdx4f7HCR3aCxhdJw5XQ==\n-----END PRIVATE KEY-----\n",
+  "client_email": "retell-ai-calendar@retell-ai-agent-calendar.iam.gserviceaccount.com",
+  "client_id": "115746840509872973550",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/retell-ai-calendar%40retell-ai-agent-calendar.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
