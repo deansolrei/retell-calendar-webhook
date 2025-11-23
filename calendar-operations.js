@@ -22,16 +22,15 @@ const DEFAULT_TIMEZONE = process.env.DEFAULT_TIMEZONE || 'America/New_York';
 const DEFAULT_REQUIRED_FREE_MINUTES = Number(process.env.DEFAULT_REQUIRED_FREE_MINUTES || 30);
 
 /**
- * getJwtAuth
+ * getJwtAuth (robust)
  * - Accepts googleCredsEnv (JSON string) OR reads process.env.GOOGLE_CREDS or process.env.GCAL_KEY_JSON.
  * - If neither present, falls back to reading gcal-creds.json from disk.
- * - Logs presence and length of client_email/private_key (NOT the secret itself) for debugging.
+ * - Tries google.auth.fromJSON first, then falls back to google.auth.JWT.
  */
 async function getJwtAuth(googleCredsEnv, impersonateUser) {
   let creds = null;
   let source = null;
 
-  // prefer explicit param
   if (googleCredsEnv && String(googleCredsEnv).trim()) {
     try {
       creds = typeof googleCredsEnv === 'string' ? JSON.parse(googleCredsEnv) : googleCredsEnv;
@@ -41,7 +40,6 @@ async function getJwtAuth(googleCredsEnv, impersonateUser) {
     }
   }
 
-  // fallback to env var GOOGLE_CREDS or GCAL_KEY_JSON
   if (!creds) {
     const envCreds = process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON || null;
     if (envCreds && String(envCreds).trim()) {
@@ -54,7 +52,6 @@ async function getJwtAuth(googleCredsEnv, impersonateUser) {
     }
   }
 
-  // final fallback to local file gcal-creds.json
   if (!creds) {
     const p = path.join(process.cwd(), 'gcal-creds.json');
     if (!fs.existsSync(p)) {
@@ -68,22 +65,43 @@ async function getJwtAuth(googleCredsEnv, impersonateUser) {
     }
   }
 
-  // Debug: report presence (NO secret contents)
+  // SAFE debug: presence/length only (do NOT log secrets)
   try {
     console.log('DEBUG getJwtAuth: source=' + (source || 'unknown') + ' client_email_present=' + !!creds.client_email + ' private_key_len=' + (creds.private_key ? String(creds.private_key).length : 0));
   } catch (e) {
     console.warn('DEBUG getJwtAuth: failed to log creds metadata:', e && e.message ? e.message : e);
   }
 
-  const jwt = new google.auth.JWT(
-    creds.client_email,
-    null,
-    creds.private_key,
-    ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
-    impersonateUser || undefined
-  );
-  await jwt.authorize();
-  return jwt;
+  // Preferred: use fromJSON to let google-auth-library pick the right flow
+  try {
+    const clientFromJson = google.auth.fromJSON(creds);
+    if (impersonateUser && typeof clientFromJson === 'object') {
+      clientFromJson.subject = impersonateUser;
+    }
+    // Ensure client has a token (some clients expose different methods)
+    if (typeof clientFromJson.authorize === 'function') {
+      await clientFromJson.authorize();
+    } else if (typeof clientFromJson.getAccessToken === 'function') {
+      await clientFromJson.getAccessToken();
+    }
+    return clientFromJson;
+  } catch (errFromJson) {
+    // Fallback to older JWT constructor if fromJSON fails
+    try {
+      const jwt = new google.auth.JWT(
+        creds.client_email,
+        null,
+        creds.private_key,
+        ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
+        impersonateUser || undefined
+      );
+      await jwt.authorize();
+      return jwt;
+    } catch (errJwt) {
+      // Throw original error to surface to caller
+      throw new Error('Failed to create auth client: ' + (errJwt && errJwt.message ? errJwt.message : errJwt));
+    }
+  }
 }
 
 // Utilities to compute free time slots
@@ -252,7 +270,11 @@ function splitName(raw) {
   const parts = noSuffix.split(/\s+/);
   const first = parts.length ? parts[0] : "";
   const last = parts.length > 1 ? parts[parts.length - 1] : "";
-  return { full_name: orig, first_name: first, last_name: last };
+  return {
+    full_name:
+
+      first, last_name: last
+  };
 }
 
 async function parse_patient_name(payload) {
