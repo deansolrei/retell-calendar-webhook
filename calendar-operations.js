@@ -95,7 +95,9 @@ async function getJwtAuth(googleCredsEnv, impersonateUser) {
         ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
         impersonateUser || undefined
       );
-      await jwt.authorize();
+  // debug: report jwt key/keyFile presence (safe: no secret content)
+  try { console.log("DEBUG jwt prepared: hasKey=", !!jwt.key, "keyFile=", !!jwt.keyFile, "keyFileExists=", require("fs").existsSync(jwt.keyFile||"")); } catch(e) {}
+await jwt.authorize();
       return jwt;
     } catch (errJwt) {
       // Throw original error to surface to caller
