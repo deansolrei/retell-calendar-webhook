@@ -210,6 +210,7 @@ async function get_calendar_slots({
   const slotsByDay = [];
 
   const auth = await getJwtAuth(googleCredsEnv || process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON, impersonateUser || process.env.GOOGLE_IMPERSONATE_USER);
+  console.log("DEBUG auth client:", auth && auth.constructor && auth.constructor.name, "creds_scope=", (auth && auth.credentials && auth.credentials.scope) || "", "token_type=", (auth && auth.credentials && auth.credentials.token_type) || "", "subject=", (typeof impersonateUser !== "undefined" ? impersonateUser : (process.env.GOOGLE_IMPERSONATE_USER||"undefined")) );
   const calendar = google.calendar({ version: 'v3', auth });
 
   for (let d = 0; d < days; d++) {
