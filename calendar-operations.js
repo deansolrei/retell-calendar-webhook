@@ -76,13 +76,13 @@ async function getJwtAuth(googleCredsEnv, impersonateUser) {
   }
 
   const scopes = ['https://www.googleapis.com/auth/calendar'];
-console.log('DEBUG jwt prepared: client_email=', creds.client_email, ' subject=', impersonateUser || undefined, ' scopes=', scopes);
+console.log('DEBUG jwt prepared: client_email=', creds.client_email, ' subject=', undefined, ' scopes=', scopes);
 const jwt = new google.auth.JWT(
     creds.client_email,
     null,
     creds.private_key,
     scopes,
-    impersonateUser || undefined
+    undefined
   );
 // ensure jwt.key and jwt.keyFile are set from creds.private_key (safe: no secret echoed)
   try { if(!jwt.key && typeof creds !== "undefined" && creds && creds.private_key) jwt.key = creds.private_key; } catch(e) {}
