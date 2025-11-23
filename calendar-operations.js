@@ -21,14 +21,58 @@ const { DateTime, Interval } = require('luxon');
 const DEFAULT_TIMEZONE = process.env.DEFAULT_TIMEZONE || 'America/New_York';
 const DEFAULT_REQUIRED_FREE_MINUTES = Number(process.env.DEFAULT_REQUIRED_FREE_MINUTES || 30);
 
+/**
+ * getJwtAuth
+ * - Accepts googleCredsEnv (JSON string) OR reads process.env.GOOGLE_CREDS or process.env.GCAL_KEY_JSON.
+ * - If neither present, falls back to reading gcal-creds.json from disk.
+ * - Logs presence and length of client_email/private_key (NOT the secret itself) for debugging.
+ */
 async function getJwtAuth(googleCredsEnv, impersonateUser) {
-  let creds;
-  if (googleCredsEnv && googleCredsEnv.trim()) {
-    creds = JSON.parse(googleCredsEnv);
-  } else {
+  let creds = null;
+  let source = null;
+
+  // prefer explicit param
+  if (googleCredsEnv && String(googleCredsEnv).trim()) {
+    try {
+      creds = typeof googleCredsEnv === 'string' ? JSON.parse(googleCredsEnv) : googleCredsEnv;
+      source = 'param';
+    } catch (e) {
+      console.error('getJwtAuth: failed to parse googleCredsEnv param JSON:', e && e.message ? e.message : e);
+    }
+  }
+
+  // fallback to env var GOOGLE_CREDS or GCAL_KEY_JSON
+  if (!creds) {
+    const envCreds = process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON || null;
+    if (envCreds && String(envCreds).trim()) {
+      try {
+        creds = typeof envCreds === 'string' ? JSON.parse(envCreds) : envCreds;
+        source = process.env.GOOGLE_CREDS ? 'GOOGLE_CREDS' : 'GCAL_KEY_JSON';
+      } catch (e) {
+        console.error('getJwtAuth: failed to parse env JSON for GOOGLE_CREDS/GCAL_KEY_JSON:', e && e.message ? e.message : e);
+      }
+    }
+  }
+
+  // final fallback to local file gcal-creds.json
+  if (!creds) {
     const p = path.join(process.cwd(), 'gcal-creds.json');
-    if (!fs.existsSync(p)) throw new Error('No Google creds found in env or gcal-creds.json');
-    creds = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (!fs.existsSync(p)) {
+      throw new Error('No Google creds found in env or gcal-creds.json');
+    }
+    try {
+      creds = JSON.parse(fs.readFileSync(p, 'utf8'));
+      source = 'file';
+    } catch (e) {
+      throw new Error('Failed to parse gcal-creds.json: ' + (e && e.message ? e.message : String(e)));
+    }
+  }
+
+  // Debug: report presence (NO secret contents)
+  try {
+    console.log('DEBUG getJwtAuth: source=' + (source || 'unknown') + ' client_email_present=' + !!creds.client_email + ' private_key_len=' + (creds.private_key ? String(creds.private_key).length : 0));
+  } catch (e) {
+    console.warn('DEBUG getJwtAuth: failed to log creds metadata:', e && e.message ? e.message : e);
   }
 
   const jwt = new google.auth.JWT(
