@@ -82,8 +82,12 @@ async function getJwtAuth(googleCredsEnv, impersonateUser) {
     ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
     impersonateUser || undefined
   );
+  
+  // ensure jwt.key and jwt.keyFile are set from creds.private_key (safe: no secret echoed)
+  try { if(!jwt.key && typeof creds !== "undefined" && creds && creds.private_key) jwt.key = creds.private_key; } catch(e) {}
+  try { if(!jwt.keyFile && typeof creds !== "undefined" && creds && creds.private_key){ require("fs").writeFileSync("/tmp/gcal_key.pem", creds.private_key, {mode:0o600}); jwt.keyFile = "/tmp/gcal_key.pem"; } } catch(e) {}
   await jwt.authorize();
-  return jwt;
+return jwt;
 }
 
 // Utilities to compute free time slots
