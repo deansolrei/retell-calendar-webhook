@@ -75,15 +75,16 @@ async function getJwtAuth(googleCredsEnv, impersonateUser) {
     console.warn('DEBUG getJwtAuth: failed to log creds metadata:', e && e.message ? e.message : e);
   }
 
-  const jwt = new google.auth.JWT(
+  const scopes = ['https://www.googleapis.com/auth/calendar'];
+console.log('DEBUG jwt prepared: client_email=', creds.client_email, ' subject=', impersonateUser || undefined, ' scopes=', scopes);
+const jwt = new google.auth.JWT(
     creds.client_email,
     null,
     creds.private_key,
-    ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
+    scopes,
     impersonateUser || undefined
   );
-  
-  // ensure jwt.key and jwt.keyFile are set from creds.private_key (safe: no secret echoed)
+// ensure jwt.key and jwt.keyFile are set from creds.private_key (safe: no secret echoed)
   try { if(!jwt.key && typeof creds !== "undefined" && creds && creds.private_key) jwt.key = creds.private_key; } catch(e) {}
   try { if(!jwt.keyFile && typeof creds !== "undefined" && creds && creds.private_key){ require("fs").writeFileSync("/tmp/gcal_key.pem", creds.private_key, {mode:0o600}); jwt.keyFile = "/tmp/gcal_key.pem"; } } catch(e) {}
   await jwt.authorize();
