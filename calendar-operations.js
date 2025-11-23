@@ -213,7 +213,9 @@ async function get_calendar_slots({
   console.log("DEBUG auth client:", auth && auth.constructor && auth.constructor.name, "creds_scope=", (auth && auth.credentials && auth.credentials.scope) || "", "token_type=", (auth && auth.credentials && auth.credentials.token_type) || "", "subject=", (typeof impersonateUser !== "undefined" ? impersonateUser : (process.env.GOOGLE_IMPERSONATE_USER||"undefined")) );
   const calendar = google.calendar({ version: 'v3', auth });
 
-  for (let d = 0; d < days; d++) {
+  
+  try { if (auth && typeof auth.getAccessToken === "function") { const at = await auth.getAccessToken(); const tok = (at && (at.token || at.access_token || at)) ? (at.token || at.access_token || at) : ""; console.log("DEBUG auth token_info: token_len=", tok ? String(tok.length) : 0, " token_type=", (auth && auth.credentials && auth.credentials.token_type) || ""); } else { console.log("DEBUG auth token_info: no getAccessToken() on auth client"); } } catch(e) { console.warn("DEBUG auth token_info: getAccessToken error", e && e.message); }
+for (let d = 0; d < days; d++) {
     const day = date.plus({ days: d });
     const dayStart = day.set({ hour: 8, minute: 0, second: 0, millisecond: 0 });
     const dayEnd = day.set({ hour: 18, minute: 0, second: 0, millisecond: 0 });
@@ -238,7 +240,9 @@ async function get_provider_availability(opts) {
 async function book_provider_appointment({ calendarId, event, googleCredsEnv = null, impersonateUser = null, sendUpdates = 'all' }) {
   const auth = await getJwtAuth(googleCredsEnv || process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON, impersonateUser || process.env.GOOGLE_IMPERSONATE_USER);
   const calendar = google.calendar({ version: 'v3', auth });
-  const insertRes = await calendar.events.insert({
+  
+  try { if (auth && typeof auth.getAccessToken === "function") { const at = await auth.getAccessToken(); const tok = (at && (at.token || at.access_token || at)) ? (at.token || at.access_token || at) : ""; console.log("DEBUG auth token_info: token_len=", tok ? String(tok.length) : 0, " token_type=", (auth && auth.credentials && auth.credentials.token_type) || ""); } else { console.log("DEBUG auth token_info: no getAccessToken() on auth client"); } } catch(e) { console.warn("DEBUG auth token_info: getAccessToken error", e && e.message); }
+const insertRes = await calendar.events.insert({
     calendarId,
     resource: event,
     sendUpdates
