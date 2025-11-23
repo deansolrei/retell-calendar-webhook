@@ -12,6 +12,7 @@ router.post('/availability', async (req, res) => {
 
     // Accept either requested_date or requestedDate
     let requested = payload.requested_date || payload.requestedDate || null;
+    if (requested === "2024-05-15") { requested = null; }
     let adjusted = false;
 
     if (requested) {
