@@ -21,25 +21,87 @@ const { DateTime, Interval } = require('luxon');
 const DEFAULT_TIMEZONE = process.env.DEFAULT_TIMEZONE || 'America/New_York';
 const DEFAULT_REQUIRED_FREE_MINUTES = Number(process.env.DEFAULT_REQUIRED_FREE_MINUTES || 30);
 
+/**
+ * getJwtAuth (robust)
+ * - Accepts googleCredsEnv (JSON string) OR reads process.env.GOOGLE_CREDS or process.env.GCAL_KEY_JSON.
+ * - If neither present, falls back to reading gcal-creds.json from disk.
+ * - Tries google.auth.fromJSON first, then falls back to google.auth.JWT.
+ */
 async function getJwtAuth(googleCredsEnv, impersonateUser) {
-  let creds;
-  if (googleCredsEnv && googleCredsEnv.trim()) {
-    creds = JSON.parse(googleCredsEnv);
-  } else {
-    const p = path.join(process.cwd(), 'gcal-creds.json');
-    if (!fs.existsSync(p)) throw new Error('No Google creds found in env or gcal-creds.json');
-    creds = JSON.parse(fs.readFileSync(p, 'utf8'));
+  let creds = null;
+  let source = null;
+
+  if (googleCredsEnv && String(googleCredsEnv).trim()) {
+    try {
+      creds = typeof googleCredsEnv === 'string' ? JSON.parse(googleCredsEnv) : googleCredsEnv;
+      source = 'param';
+    } catch (e) {
+      console.error('getJwtAuth: failed to parse googleCredsEnv param JSON:', e && e.message ? e.message : e);
+    }
   }
 
-  const jwt = new google.auth.JWT(
-    creds.client_email,
-    null,
-    creds.private_key,
-    ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
-    impersonateUser || undefined
-  );
-  await jwt.authorize();
-  return jwt;
+  if (!creds) {
+    const envCreds = process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON || null;
+    if (envCreds && String(envCreds).trim()) {
+      try {
+        creds = typeof envCreds === 'string' ? JSON.parse(envCreds) : envCreds;
+        source = process.env.GOOGLE_CREDS ? 'GOOGLE_CREDS' : 'GCAL_KEY_JSON';
+      } catch (e) {
+        console.error('getJwtAuth: failed to parse env JSON for GOOGLE_CREDS/GCAL_KEY_JSON:', e && e.message ? e.message : e);
+      }
+    }
+  }
+
+  if (!creds) {
+    const p = path.join(process.cwd(), 'gcal-creds.json');
+    if (!fs.existsSync(p)) {
+      throw new Error('No Google creds found in env or gcal-creds.json');
+    }
+    try {
+      creds = JSON.parse(fs.readFileSync(p, 'utf8'));
+      source = 'file';
+    } catch (e) {
+      throw new Error('Failed to parse gcal-creds.json: ' + (e && e.message ? e.message : String(e)));
+    }
+  }
+
+  // SAFE debug: presence/length only (do NOT log secrets)
+  try {
+    console.log('DEBUG getJwtAuth: source=' + (source || 'unknown') + ' client_email_present=' + !!creds.client_email + ' private_key_len=' + (creds.private_key ? String(creds.private_key).length : 0));
+  } catch (e) {
+    console.warn('DEBUG getJwtAuth: failed to log creds metadata:', e && e.message ? e.message : e);
+  }
+
+  // Preferred: use fromJSON to let google-auth-library pick the right flow
+  try {
+    const clientFromJson = google.auth.fromJSON(creds);
+    if (impersonateUser && typeof clientFromJson === 'object') {
+      clientFromJson.subject = impersonateUser;
+    }
+    // Ensure client has a token (some clients expose different methods)
+    if (typeof clientFromJson.authorize === 'function') {
+      await clientFromJson.authorize();
+    } else if (typeof clientFromJson.getAccessToken === 'function') {
+      await clientFromJson.getAccessToken();
+    }
+    return clientFromJson;
+  } catch (errFromJson) {
+    // Fallback to older JWT constructor if fromJSON fails
+    try {
+      const jwt = new google.auth.JWT(
+        creds.client_email,
+        null,
+        creds.private_key,
+        ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'],
+        impersonateUser || undefined
+      );
+      await jwt.authorize();
+      return jwt;
+    } catch (errJwt) {
+      // Throw original error to surface to caller
+      throw new Error('Failed to create auth client: ' + (errJwt && errJwt.message ? errJwt.message : errJwt));
+    }
+  }
 }
 
 // Utilities to compute free time slots
@@ -116,16 +178,54 @@ async function listEvents(calendar, calendarId, timeMinISO, timeMaxISO) {
   return res.data.items || [];
 }
 
-async function get_calendar_slots({ calendarId, requestedDate, slotDurationMinutes = DEFAULT_REQUIRED_FREE_MINUTES, daysToCheck = 1, timezone = DEFAULT_TIMEZONE, googleCredsEnv = null, impersonateUser = null }) {
-  const auth = await getJwtAuth(googleCredsEnv || process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON, impersonateUser || process.env.GOOGLE_IMPERSONATE_USER);
-  const calendar = google.calendar({ version: 'v3', auth });
+/**
+ * get_calendar_slots
+ * - Accepts both camelCase and snake_case param names from callers (requestedDate / requested_date,
+ *   slotDurationMinutes / slot_duration_minutes, timezone / user_timezone)
+ * - If requested date is in the past (in provider timezone), it will search from "today" (in that timezone).
+ * - Returns slots by day as before.
+ */
+async function get_calendar_slots({
+  calendarId,
+  requestedDate,
+  requested_date,
+  slotDurationMinutes = DEFAULT_REQUIRED_FREE_MINUTES,
+  slot_duration_minutes,
+  daysToCheck = 1,
+  days_to_check,
+  timezone = DEFAULT_TIMEZONE,
+  user_timezone,
+  googleCredsEnv = null,
+  impersonateUser = null
+}) {
+  // Accept snake_case fallbacks
+  const slotMinutes = Number(slotDurationMinutes || slot_duration_minutes || DEFAULT_REQUIRED_FREE_MINUTES);
+  const tz = timezone || user_timezone || DEFAULT_TIMEZONE;
+  const days = Number(daysToCheck || days_to_check || 1);
 
-  const date = requestedDate ? DateTime.fromISO(requestedDate, { zone: timezone }) : DateTime.now().setZone(timezone);
-  if (!date.isValid) throw new Error('Invalid requestedDate');
+  // Accept either requestedDate or requested_date from callers/tools
+  const requested = requestedDate || requested_date || null;
+
+  // Parse date in the specified timezone; default to now in timezone
+  let date = requested ? DateTime.fromISO(requested, { zone: tz }) : DateTime.now().setZone(tz);
+
+  if (!date.isValid) {
+    // If parsing fails, fallback to now
+    date = DateTime.now().setZone(tz);
+  }
+
+  // If requested date is strictly earlier than today (in tz), set to today
+  const todayStart = DateTime.now().setZone(tz).startOf('day');
+  if (date < todayStart) {
+    date = DateTime.now().setZone(tz);
+  }
 
   const slotsByDay = [];
 
-  for (let d = 0; d < daysToCheck; d++) {
+  const auth = await getJwtAuth(googleCredsEnv || process.env.GOOGLE_CREDS || process.env.GCAL_KEY_JSON, impersonateUser || process.env.GOOGLE_IMPERSONATE_USER);
+  const calendar = google.calendar({ version: 'v3', auth });
+
+  for (let d = 0; d < days; d++) {
     const day = date.plus({ days: d });
     const dayStart = day.set({ hour: 8, minute: 0, second: 0, millisecond: 0 });
     const dayEnd = day.set({ hour: 18, minute: 0, second: 0, millisecond: 0 });
@@ -134,13 +234,13 @@ async function get_calendar_slots({ calendarId, requestedDate, slotDurationMinut
     const timeMaxISO = dayEnd.toISO();
 
     const events = await listEvents(calendar, calendarId, timeMinISO, timeMaxISO);
-    const busy = mergeBusyIntervals(events, timezone);
+    const busy = mergeBusyIntervals(events, tz);
     const window = Interval.fromDateTimes(dayStart, dayEnd);
-    const slots = computeFreeSlots(busy, window, Number(slotDurationMinutes));
+    const slots = computeFreeSlots(busy, window, Number(slotMinutes));
     slotsByDay.push({ date: day.toISODate(), slots });
   }
 
-  return { ok: true, timezone, days: slotsByDay };
+  return { ok: true, timezone: tz, days: slotsByDay };
 }
 
 async function get_provider_availability(opts) {
@@ -170,7 +270,11 @@ function splitName(raw) {
   const parts = noSuffix.split(/\s+/);
   const first = parts.length ? parts[0] : "";
   const last = parts.length > 1 ? parts[parts.length - 1] : "";
-  return { full_name: orig, first_name: first, last_name: last };
+  return {
+    full_name:
+
+      first, last_name: last
+  };
 }
 
 async function parse_patient_name(payload) {
